@@ -1,10 +1,14 @@
+from datetime import datetime
+from typing import Optional
+
 import databases
 import enum
 import sqlalchemy
-
+from pydantic import BaseModel, validator
 from fastapi import FastAPI
 from decouple import config
-
+from email_validator import validate_email as validate_e, EmailNotValidError
+from passlib.context import CryptContext
 
 DATABASE_URL = (
     f"postgresql://{config('DB_USER')}:{config('DB_PASSWORD')}@localhost:5432/clothes"
@@ -78,7 +82,45 @@ clothes = sqlalchemy.Table(
 )
 
 
+class EmailField(str):
+    @classmethod
+    def __get_validators__(cls):
+        yield cls.validate
+
+    @classmethod
+    def validate(cls, v) -> str:
+        try:
+            validate_e(v)
+            return v
+        except EmailNotValidError:
+            raise ValueError("Email is not valid")
+
+
+class BaseUser(BaseModel):
+    email: EmailField
+    full_name: Optional[str]
+
+    @validator("full_name")
+    def validate_full_name(cls, v):
+        try:
+            first_name, last_name = v.split()
+            return v
+        except Exception:
+            raise ValueError("You should provide at least 2 names ")
+
+
+class UserSignIn(BaseUser):
+    password: str
+
+
+class UserSignOut(BaseUser):
+    phone: Optional[str]
+    created_at: datetime
+    last_modified_at: datetime
+
+
 app = FastAPI()
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 @app.on_event("startup")
@@ -89,3 +131,12 @@ async def startup():
 @app.on_event("shutdown")
 async def shutdown():
     await database.disconnect()
+
+
+@app.post("/register/", response_model=UserSignOut)
+async def create_user(user: UserSignIn):
+    user.password = pwd_context.hash(user.password)
+    q = users.insert().values(**user.dict())
+    id_ = await database.execute(q)
+    created_user = await database.fetch_one(users.select().where(users.c.id == id_))
+    return created_user
