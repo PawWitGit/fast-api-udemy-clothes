@@ -1,8 +1,10 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 import databases
 import enum
+
+import jwt
 import sqlalchemy
 from pydantic import BaseModel, validator
 from fastapi import FastAPI
@@ -97,7 +99,7 @@ class EmailField(str):
 
 
 class BaseUser(BaseModel):
-    email: EmailField
+    email: str
     full_name: Optional[str]
 
     @validator("full_name")
@@ -123,6 +125,17 @@ app = FastAPI()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
+def create_acces_token(user):
+    try:
+        payload = {
+            "sub": user["id"],
+            "exp": datetime.utcnow() + timedelta(minutes=120),
+        }
+        return jwt.encode(payload, config("JWT_SECRET"), algorithm="HS256")
+    except Exception as ex:
+        raise ex
+
+
 @app.on_event("startup")
 async def startup():
     await database.connect()
@@ -133,10 +146,12 @@ async def shutdown():
     await database.disconnect()
 
 
-@app.post("/register/", response_model=UserSignOut)
+# @app.post("/register/", response_model=UserSignOut)
+@app.post("/register/")
 async def create_user(user: UserSignIn):
     user.password = pwd_context.hash(user.password)
     q = users.insert().values(**user.dict())
     id_ = await database.execute(q)
     created_user = await database.fetch_one(users.select().where(users.c.id == id_))
-    return created_user
+    token = create_acces_token(created_user)
+    return {"token": token}
